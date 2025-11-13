@@ -1,0 +1,10 @@
+fastapi==0.109.0
+uvicorn==0.27.0
+pydantic==2.5.3
+httpx==0.26.0
+chromadb==0.4.22
+beautifulsoup4==4.12.3
+playwright==1.41.0
+python-multipart==0.0.6
+aiofiles==23.2.1
+lxml==5.1.0

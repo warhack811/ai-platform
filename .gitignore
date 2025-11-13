@@ -1,0 +1,31 @@
+# Node
+node_modules/
+package-lock.json
+npm-debug.log*
+build/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+
+# Database
+*.db
+chroma_db/
+
+# Models
+*.gguf
+*.bin
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
