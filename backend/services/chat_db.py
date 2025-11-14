@@ -16,7 +16,7 @@ class ChatHistory(Base):
     role = Column(String(20), nullable=False)  # user veya assistant
     content = Column(Text, nullable=False)
     timestamp = Column(DateTime, default=datetime.now)
-    extra_data = Column(Text, default="{}")  # ← DEĞİŞTİ: metadata yerine extra_data
+    extra_data = Column(Text, default="{}")  # metadata için
 
 
 class ChatDatabase:
@@ -33,7 +33,7 @@ class ChatDatabase:
         session_id: str, 
         role: str, 
         content: str,
-        extra_data: Optional[Dict] = None  # ← DEĞİŞTİ: metadata yerine extra_data
+        extra_data: Optional[Dict] = None
     ):
         """Mesajı veritabanına kaydet"""
         session = self.SessionLocal()
@@ -43,7 +43,7 @@ class ChatDatabase:
                 session_id=session_id,
                 role=role,
                 content=content,
-                extra_data=json.dumps(extra_data or {})  # ← DEĞİŞTİ
+                extra_data=json.dumps(extra_data or {})
             )
             session.add(msg)
             session.commit()
@@ -72,7 +72,7 @@ class ChatDatabase:
                     "role": msg.role,
                     "content": msg.content,
                     "timestamp": msg.timestamp.isoformat(),
-                    "metadata": json.loads(msg.extra_data)  # ← Frontend için metadata olarak döndür
+                    "metadata": json.loads(msg.extra_data)
                 }
                 for msg in reversed(messages)  # Eski → Yeni sıralama
             ]

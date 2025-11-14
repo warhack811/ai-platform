@@ -1,38 +1,54 @@
-# Node
-node_modules/
-package-lock.json
-npm-debug.log*
-build/
-dist/
-
-models/
-*.gguf
-*.bin
-*.ckpt
-__pycache__/
-*.log
-
-# Python
+# ============================
+# PYTHON BACKEND
+# ============================
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.log
+
+# Sanal ortamlar
+.venv/
 venv/
 env/
 
-# Database
+# Database dosyaları (senin dediğin "chat_history.db" / "chath_histeri.db" burada)
 *.db
-chroma_db/
+*.sqlite
+*.sqlite3
 
-# Models
+# ChromaDB / FAISS / cache
+chroma_db/
+backend/chroma_db/
+*.chroma
+
+# Modeller (GGUF, safetensors vs.)
+models/
 *.gguf
 *.bin
+*.pt
+*.pth
+*.safetensors
 
-# Environment
-.env
+# ============================
+# NODE / REACT FRONTEND
+# ============================
+node_modules/
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp.*
+.sass-cache/
+.cache/
+dist/
+build/
 
-# IDE
+# ============================
+# OS / EDITOR FILES
+# ============================
 .vscode/
 .idea/
-
-# OS
+*.iml
 .DS_Store
 Thumbs.db

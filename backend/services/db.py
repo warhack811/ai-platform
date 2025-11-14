@@ -43,6 +43,7 @@ search_cache = OrderedDict()
 
 
 def create_embedding(text: str) -> List[float]:
+    """Metin için embedding oluştur"""
     try:
         return embedding_model.encode(text, show_progress_bar=False).tolist()
     except Exception as e:
@@ -51,7 +52,7 @@ def create_embedding(text: str) -> List[float]:
 
 
 def save_to_db(text: str, metadata: Dict, doc_id: str) -> bool:
-    """ChromaDB kayıt"""
+    """ChromaDB'ye kayıt - web_search.py tarafından kullanılıyor"""
     try:
         # Duplicate check
         try:
@@ -83,7 +84,7 @@ def save_to_db(text: str, metadata: Dict, doc_id: str) -> bool:
 
 
 def search_db(query: str, n: int = 3, min_relevance: float = 50.0) -> List[Dict]:
-    """ChromaDB semantic search"""
+    """ChromaDB semantic search - main.py tarafından kullanılıyor"""
     try:
         if collection.count() == 0:
             return []
@@ -123,7 +124,7 @@ def search_db(query: str, n: int = 3, min_relevance: float = 50.0) -> List[Dict]
 
 
 def manage_cache(key: str, value: Any = None) -> Optional[Any]:
-    """Thread-safe LRU cache (basit)"""
+    """Thread-safe LRU cache - web_search.py tarafından kullanılıyor"""
     global search_cache
 
     if value is None:

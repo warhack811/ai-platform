@@ -1,19 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
-import { 
-  Send, 
-  Settings, 
-  FileText, 
-  BarChart3, 
-  Brain, 
-  Loader2, 
-  Globe, 
-  Database, 
-  Zap, 
-  Download, 
-  Trash2 
-} from 'lucide-react';
+import { Send, Settings, FileText, BarChart3, Brain, Loader2, Globe, Database, Zap } from 'lucide-react';
 import './App.css';
 
 const API_BASE = 'http://localhost:8000/api';
@@ -31,8 +19,9 @@ function App() {
   const [mode, setMode] = useState('normal');
   const [useWebSearch, setUseWebSearch] = useState(true);
   const [maxSources, setMaxSources] = useState(5);
-  const [temperature, setTemperature] = useState(0.5);  // 0.3 → 0.5
-  const [maxTokens, setMaxTokens] = useState(1500);    // 2000 → 1500
+  const [temperature, setTemperature] = useState(0.5);
+  const [maxTokens, setMaxTokens] = useState(1500);
+  
   const modeDefaults = {
     normal: { temperature: 0.5, maxTokens: 1500 },
     research: { temperature: 0.3, maxTokens: 2500 },
@@ -40,15 +29,13 @@ function App() {
     code: { temperature: 0.2, maxTokens: 3000 }
   };
 
-  // Mode değiştiğinde parametreleri otomatik ayarla
   useEffect(() => {
-    const defaults = modeDefaults[mode] || modeDefaults.normal;
-    setTemperature(defaults.temperature);
-    setMaxTokens(defaults.maxTokens);
-  }, [mode]); // mode değiştiğinde çalışır
-  // Döküman
-  const [uploadedFile, setUploadedFile] = useState(null);
+  const defaults = modeDefaults[mode] || modeDefaults.normal;
+  setTemperature(defaults.temperature);
+  setMaxTokens(defaults.maxTokens);
+}, [mode, modeDefaults]);
   
+  const [uploadedFile, setUploadedFile] = useState(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   
@@ -58,7 +45,7 @@ function App() {
   
   useEffect(scrollToBottom, [messages]);
   
-  // İstatistikleri yükle (optimize - 30s)
+  // İstatistikler
   useEffect(() => {
     const loadStats = async () => {
       try {
@@ -70,181 +57,101 @@ function App() {
     };
     
     loadStats();
-    const interval = setInterval(loadStats, 60000); // 30s → 60s (daha az istek)
-    
+    const interval = setInterval(loadStats, 60000);
     return () => clearInterval(interval);
   }, []);
   
-  // Mesaj gönder (optimize)
-  // Mesaj gönder (STREAMING DESTEĞI)
-const sendMessage = async () => {
-  if (!input.trim() || loading) return;
-  
-  const userMessage = {
-    role: 'user',
-    content: input,
-    timestamp: new Date().toISOString()
-  };
-  
-  setMessages(prev => [...prev, userMessage]);
-  const currentInput = input;
-  setInput('');
-  setLoading(true);
-  
-  // Streaming için boş assistant mesajı ekle
-  const assistantMessageIndex = messages.length + 1;
-  setMessages(prev => [...prev, {
-    role: 'assistant',
-    content: '',
-    sources: [],
-    timestamp: new Date().toISOString(),
-    streaming: true
-  }]);
-  
-  try {
-    const response = await fetch(`${API_BASE}/chat/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+  // ⚡ YENİ: Debug + Düzeltilmiş Mesaj Gönderme
+  const sendMessage = async () => {
+    if (!input.trim() || loading) return;
+    
+    const simpleQueries = ['merhaba', 'selam', 'nasılsın', 'nasilsin', 'naber', 'hello', 'hi'];
+    const isSimple = simpleQueries.some(word => input.toLowerCase().includes(word));
+    const shouldUseWeb = isSimple ? false : useWebSearch;
+    
+    const userMessage = {
+      role: 'user',
+      content: input,
+      timestamp: new Date().toISOString()
+    };
+    
+    setMessages(prev => [...prev, userMessage]);
+    const currentInput = input;
+    setInput('');
+    setLoading(true);
+    
+    try {
+      console.log('📤 İstek gönderiliyor:', {
+        message: currentInput,
+        mode,
+        use_web_search: shouldUseWeb
+      });
+      
+      const response = await axios.post(`${API_BASE}/chat`, {
         message: currentInput,
         mode: mode,
-        use_web_search: useWebSearch,
+        use_web_search: shouldUseWeb,
         max_sources: maxSources,
         temperature: temperature,
         max_tokens: maxTokens,
         user_id: userId,
         session_id: sessionId
-      })
-    });
-    
-    if (!response.ok) throw new Error('Streaming hatası');
-    
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let fullText = '';
-    let sources = [];
-    
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      }, {
+        timeout: 90000
+      });
       
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
+      console.log('📥 Cevap geldi:', response.data);
       
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          try {
-            const data = JSON.parse(line.slice(6));
-            
-            if (data.type === 'metadata') {
-              sources = data.sources || [];
-            } else if (data.type === 'chunk') {
-              fullText += data.content;
-              // Mesajı güncelle (streaming)
-              setMessages(prev => {
-                const newMessages = [...prev];
-                newMessages[assistantMessageIndex] = {
-                  role: 'assistant',
-                  content: fullText,
-                  sources: sources,
-                  timestamp: new Date().toISOString(),
-                  streaming: true
-                };
-                return newMessages;
-              });
-            } else if (data.type === 'done') {
-              // Streaming bitti
-              setMessages(prev => {
-                const newMessages = [...prev];
-                newMessages[assistantMessageIndex].streaming = false;
-                return newMessages;
-              });
-            } else if (data.type === 'error') {
-              throw new Error(data.message);
-            }
-          } catch (e) {
-            console.error('Parse hatası:', e);
-          }
-        }
+      // ⚠️ DÜZELTME: response.data.response kontrolü
+      const aiResponse = response.data?.response || response.data?.content || 'Cevap alınamadı';
+      
+      if (!aiResponse || aiResponse.trim() === '') {
+        console.error('❌ Boş cevap geldi! Response:', response.data);
+        throw new Error('Backend boş cevap döndürdü');
       }
-    }
-    
-  } catch (error) {
-    console.error('Hata:', error);
-    setMessages(prev => {
-      const newMessages = [...prev];
-      newMessages[assistantMessageIndex] = {
+      
+      const aiMessage = {
         role: 'assistant',
-        content: `❌ ${error.message}`,
-        timestamp: new Date().toISOString(),
-        streaming: false
+        content: aiResponse,
+        sources: response.data.sources || [],
+        timestamp: response.data.timestamp || new Date().toISOString()
       };
-      return newMessages;
-    });
-  } finally {
-    setLoading(false);
-  }
-};
-// Chat history yükle
-const loadHistory = async () => {
-  try {
-    const response = await axios.get(`${API_BASE}/history/${userId}/${sessionId}?limit=100`);
-    if (response.data.history && response.data.history.length > 0) {
-      const formattedMessages = response.data.history.map(msg => ({
-        role: msg.role,
-        content: msg.content,
-        timestamp: msg.timestamp,
-        sources: msg.metadata?.sources || []
-      }));
-      setMessages(formattedMessages);
+      
+      console.log('✅ AI Mesajı oluşturuldu:', aiMessage);
+      setMessages(prev => [...prev, aiMessage]);
+      
+      if (stats) {
+        setStats(prev => ({
+          ...prev,
+          total_queries: (prev?.total_queries || 0) + 1
+        }));
+      }
+      
+    } catch (error) {
+      console.error('❌ Hata:', error);
+      console.error('❌ Error response:', error.response?.data);
+      
+      let errorText = "Bağlantı sorunu. Lütfen tekrar deneyin.";
+      
+      if (error.code === 'ECONNABORTED') {
+        errorText = "İstek zaman aşımına uğradı. Lütfen tekrar deneyin.";
+      } else if (error.response) {
+        errorText = `Backend hatası (${error.response.status}): ${JSON.stringify(error.response.data)}`;
+      } else if (error.message) {
+        errorText = `Hata: ${error.message}`;
+      }
+      
+      const errorMessage = {
+        role: 'assistant',
+        content: `❌ ${errorText}`,
+        timestamp: new Date().toISOString()
+      };
+      setMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setLoading(false);
     }
-  } catch (error) {
-    console.error('History yükleme hatası:', error);
-  }
-};
-
-// Chat export
-const exportChat = async () => {
-  try {
-    const response = await axios.post(`${API_BASE}/history/export`, {
-      user_id: userId,
-      session_id: sessionId
-    }, {
-      responseType: 'blob'
-    });
-    
-    const url = window.URL.createObjectURL(new Blob([response.data]));
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `chat_${sessionId}.json`);
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-  } catch (error) {
-    alert('Export hatası: ' + error.message);
-  }
-};
-
-// Chat sil
-const clearChat = async () => {
-  if (!window.confirm('Tüm chat geçmişi silinecek. Emin misiniz?')) return;
+  };
   
-  try {
-    await axios.delete(`${API_BASE}/history/${userId}/${sessionId}`);
-    setMessages([]);
-    alert('✅ Chat geçmişi silindi');
-  } catch (error) {
-    alert('Silme hatası: ' + error.message);
-  }
-};
-// History otomatik yükle
-useEffect(() => {
-  loadHistory();
-}, []);  // Component mount olunca 1 kez çalışır
-  
-  // Enter ile gönder
   const handleKeyPress = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -252,7 +159,6 @@ useEffect(() => {
     }
   };
   
-  // Döküman yükle
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -274,7 +180,6 @@ useEffect(() => {
       alert(`✅ ${file.name} başarıyla yüklendi!`);
       setUploadedFile(null);
       
-      // Stats güncelle
       if (stats) {
         setStats(prev => ({
           ...prev,
@@ -289,7 +194,6 @@ useEffect(() => {
     }
   };
   
-  // Prompt şablonları
   const promptTemplates = {
     'Araştırma': 'Şu konuda detaylı araştırma yap: ',
     'Kod Yaz': 'Şu işi yapan kod yaz: ',
@@ -298,19 +202,17 @@ useEffect(() => {
     'Açıkla': 'Şunu basitçe açıkla: '
   };
   
-  // ⭐️ HATA DÜZELTMESİ (1/2): Fonksiyonun adını "use" ile başlamayacak şekilde değiştirdim.
   const applyTemplate = (template) => {
     setInput(template);
   };
   
   return (
     <div className="app">
-      {/* Sidebar */}
       <div className="sidebar">
         <div className="logo">
           <Zap size={32} color="#8b5cf6" />
-          <h1>Muhammet AI</h1>
-          <span className="badge">ULTRA</span>
+          <h1>DeepSeek AI</h1>
+          <span className="badge">SANSÜRSÜZ</span>
         </div>
         
         <nav className="nav-tabs">
@@ -344,7 +246,6 @@ useEffect(() => {
           </button>
         </nav>
         
-        {/* Hızlı İstatistikler */}
         {stats && (
           <div className="quick-stats">
             <div className="stat-item">
@@ -353,7 +254,7 @@ useEffect(() => {
             </div>
             <div className="stat-item">
               <span className="stat-label">Taranan Site</span>
-              <span className="stat-value">{stats.total_scraped_sites}</span>
+              <span className="stat-value">{stats.total_scraped_sites || 0}</span>
             </div>
             <div className="stat-item">
               <span className="stat-label">DB Boyutu</span>
@@ -365,82 +266,43 @@ useEffect(() => {
         <div className="sidebar-footer">
           <div className="optimize-badge">
             <Zap size={16} />
-            <span>Ultra Optimize</span>
+            <span>Sansürsüz Mod</span>
           </div>
         </div>
       </div>
       
-      {/* Ana İçerik */}
       <div className="main-content">
         {activeTab === 'chat' && (
           <div className="chat-container">
-            {/* Prompt Şablonları */}
             <div className="prompt-templates">
               {Object.entries(promptTemplates).map(([name, template]) => (
                 <button 
                   key={name}
                   className="template-btn"
-                  // ⭐️ HATA DÜZELTMESİ (2/2): Şimdi doğru adı ("applyTemplate") çağırıyoruz.
                   onClick={() => applyTemplate(template)}
                 >
                   {name}
                 </button>
               ))}
             </div>
-            {/* Chat Toolbar (EXPORT/CLEAR) */}
-<div className="chat-toolbar">
-  <button className="toolbar-btn" onClick={loadHistory}>
-    <Database size={16} />
-    Geçmişi Yükle
-  </button>
-  <button className="toolbar-btn" onClick={exportChat}>
-    <Download size={16} />
-    Export JSON
-  </button>
-  <button className="toolbar-btn danger" onClick={clearChat}>
-    <Trash2 size={16} />
-    Tümünü Sil
-  </button>
-</div>
-            {/* Mesajlar */}
+            
             <div className="messages">
               {messages.length === 0 && (
                 <div className="welcome">
                   <Brain size={64} />
-                  <h2>Muhammet AI - Ultra Optimized</h2>
-                  <p>3x daha hızlı • Akıllı cache • Sansürsüz</p>
+                  <h2>DeepSeek AI - Sansürsüz</h2>
+                  <p>Türkçe optimizasyonlu • Hybrid learning</p>
+                  <small style={{marginTop: '10px', color: '#888'}}>
+                    🔍 F12 açıp Console'u kontrol edin
+                  </small>
                 </div>
               )}
               
               {messages.map((msg, idx) => (
                 <div key={idx} className={`message ${msg.role}`}>
                   <div className="message-content">
-                    <ReactMarkdown
-  components={{
-    code({ node, inline, className, children, ...props }) {
-      return (
-        <code 
-          className={className} 
-          style={{
-            background: 'rgba(0,0,0,0.3)',
-            padding: inline ? '2px 6px' : '12px',
-            borderRadius: '4px',
-            display: inline ? 'inline' : 'block',
-            fontFamily: 'monospace',
-            fontSize: '14px'
-          }}
-          {...props}
-        >
-          {children}
-        </code>
-      );
-    }
-  }}
->
-  {msg.content}
-</ReactMarkdown>
+                    <ReactMarkdown>{msg.content}</ReactMarkdown>
                     
-                    {/* Kaynaklar */}
                     {msg.sources && msg.sources.length > 0 && (
                       <div className="sources">
                         <h4>📚 Kaynaklar ({msg.sources.length})</h4>
@@ -467,27 +329,24 @@ useEffect(() => {
               ))}
               
               {loading && (
-  <div className="message assistant">
-    <div className="message-content">
-      <Loader2 className="spinner" size={24} />
-      <span>🔍 Web'de aranıyor ve analiz ediliyor...</span>
-    </div>
-  </div>
-)}
+                <div className="message assistant">
+                  <div className="message-content">
+                    <Loader2 className="spinner" size={24} />
+                    <span>💭 Düşünüyor...</span>
+                  </div>
+                </div>
+              )}
               
               <div ref={messagesEndRef} />
             </div>
             
-            {/* Input Area */}
             <div className="input-area">
               <div className="mode-selector">
                 <select value={mode} onChange={(e) => setMode(e.target.value)}>
-                  <option value="normal">💬 Normal Sohbet</option>
-                  <option value="research">🔍 Araştırmacı</option>
-                  <option value="creative">🎨 Yaratıcı Yazar</option>
-                  <option value="code">💻 Yazılımcı</option>
-                  <option value="friend">👋 Arkadaş</option>
-                  <option value="assistant">📋 Kişisel Asistan</option>
+                  <option value="normal">💬 Normal</option>
+                  <option value="research">🔍 Araştırma</option>
+                  <option value="creative">🎨 Yaratıcı</option>
+                  <option value="code">💻 Kod</option>
                 </select>
                 
                 <label className="web-toggle">
@@ -527,7 +386,7 @@ useEffect(() => {
             <h2>⚙️ Model Ayarları</h2>
             
             <div className="setting-group">
-              <label>Temperature (Yaratıcılık): {temperature}</label>
+              <label>Temperature: {temperature}</label>
               <input 
                 type="range"
                 min="0"
@@ -536,7 +395,6 @@ useEffect(() => {
                 value={temperature}
                 onChange={(e) => setTemperature(parseFloat(e.target.value))}
               />
-              <small>0.3 = Tutarlı (önerilen), 1.0 = Yaratıcı</small>
             </div>
             
             <div className="setting-group">
@@ -549,7 +407,6 @@ useEffect(() => {
                 value={maxTokens}
                 onChange={(e) => setMaxTokens(parseInt(e.target.value))}
               />
-              <small>Cevap uzunluğu (1000-2000 önerilen)</small>
             </div>
             
             <div className="setting-group">
@@ -562,7 +419,6 @@ useEffect(() => {
                 value={maxSources}
                 onChange={(e) => setMaxSources(parseInt(e.target.value))}
               />
-              <small>Web'de kaç site taransın (5 önerilen)</small>
             </div>
             
             <div className="setting-group">
@@ -574,7 +430,6 @@ useEffect(() => {
                 />
                 Otomatik Web Araması
               </label>
-              <small>Her soruda web araması yapsın mı?</small>
             </div>
           </div>
         )}
@@ -596,7 +451,7 @@ useEffect(() => {
                 onClick={() => fileInputRef.current.click()}
               >
                 <FileText size={24} />
-                Döküman Yükle (.txt, .md)
+                Döküman Yükle
               </button>
               
               {uploadedFile && (
@@ -609,7 +464,6 @@ useEffect(() => {
             <div className="info-box">
               <Database size={32} />
               <h3>Vektör Database</h3>
-              <p>Yüklediğiniz dökümanlar otomatik indexlenir.</p>
               <p><strong>Toplam:</strong> {stats?.total_documents || 0} döküman</p>
               <p><strong>DB Boyutu:</strong> {stats?.db_size || 0} kayıt</p>
             </div>
@@ -633,14 +487,14 @@ useEffect(() => {
                 <div className="stat-icon">🌐</div>
                 <div className="stat-info">
                   <h3>Taranan Site</h3>
-                  <p className="stat-number">{stats.total_scraped_sites}</p>
+                  <p className="stat-number">{stats.total_scraped_sites || 0}</p>
                 </div>
               </div>
               
               <div className="stat-card">
                 <div className="stat-icon">📚</div>
                 <div className="stat-info">
-                  <h3>Yüklenen Döküman</h3>
+                  <h3>Döküman</h3>
                   <p className="stat-number">{stats.total_documents}</p>
                 </div>
               </div>
@@ -649,20 +503,9 @@ useEffect(() => {
                 <div className="stat-icon">💾</div>
                 <div className="stat-info">
                   <h3>Database</h3>
-                  <p className="stat-number">{stats.db_size} kayıt</p>
+                  <p className="stat-number">{stats.db_size}</p>
                 </div>
               </div>
-            </div>
-            
-            <div className="optimize-info">
-              <h3>⚡ Optimize Özellikler</h3>
-              <ul>
-                <li>✅ 3x daha hızlı web scraping (paralel)</li>
-                <li>✅ Akıllı cache (1 saat)</li>
-                <li>✅ ChromaDB garantili kayıt</li>
-                <li>✅ Google rate limit bypass</li>
-                <li>✅ Duplicate prevention</li>
-              </ul>
             </div>
           </div>
         )}
