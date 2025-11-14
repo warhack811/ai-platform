@@ -5,6 +5,13 @@ npm-debug.log*
 build/
 dist/
 
+models/
+*.gguf
+*.bin
+*.ckpt
+__pycache__/
+*.log
+
 # Python
 __pycache__/
 *.pyc

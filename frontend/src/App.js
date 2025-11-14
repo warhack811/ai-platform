@@ -1,7 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
-import { Send, Settings, FileText, BarChart3, Brain, Loader2, Globe, Database, Zap } from 'lucide-react';
+import { 
+  Send, 
+  Settings, 
+  FileText, 
+  BarChart3, 
+  Brain, 
+  Loader2, 
+  Globe, 
+  Database, 
+  Zap, 
+  Download, 
+  Trash2 
+} from 'lucide-react';
 import './App.css';
 
 const API_BASE = 'http://localhost:8000/api';
@@ -64,73 +76,173 @@ function App() {
   }, []);
   
   // Mesaj gönder (optimize)
-  const sendMessage = async () => {
-    if (!input.trim() || loading) return;
-    
-    // Basit sorular için web aramasını otomatik kapat
-    const simpleQueries = ['merhaba', 'selam', 'nasılsın', 'nasilsin', 'naber', 'hello', 'hi'];
-    const isSimple = simpleQueries.some(word => input.toLowerCase().includes(word));
-    const shouldUseWeb = isSimple ? false : useWebSearch;
-    
-    const userMessage = {
-      role: 'user',
-      content: input,
-      timestamp: new Date().toISOString()
-    };
-    
-    setMessages(prev => [...prev, userMessage]);
-    const currentInput = input;
-    setInput('');
-    setLoading(true);
-    
-    try {
-      const response = await axios.post(`${API_BASE}/chat`, {
+  // Mesaj gönder (STREAMING DESTEĞI)
+const sendMessage = async () => {
+  if (!input.trim() || loading) return;
+  
+  const userMessage = {
+    role: 'user',
+    content: input,
+    timestamp: new Date().toISOString()
+  };
+  
+  setMessages(prev => [...prev, userMessage]);
+  const currentInput = input;
+  setInput('');
+  setLoading(true);
+  
+  // Streaming için boş assistant mesajı ekle
+  const assistantMessageIndex = messages.length + 1;
+  setMessages(prev => [...prev, {
+    role: 'assistant',
+    content: '',
+    sources: [],
+    timestamp: new Date().toISOString(),
+    streaming: true
+  }]);
+  
+  try {
+    const response = await fetch(`${API_BASE}/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         message: currentInput,
         mode: mode,
-        use_web_search: shouldUseWeb,
+        use_web_search: useWebSearch,
         max_sources: maxSources,
         temperature: temperature,
         max_tokens: maxTokens,
         user_id: userId,
         session_id: sessionId
-      }, {
-        timeout: 90000 // 3 dakika → 90 saniye (daha hızlı fail)
-      });
+      })
+    });
+    
+    if (!response.ok) throw new Error('Streaming hatası');
+    
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let fullText = '';
+    let sources = [];
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
       
-      const aiMessage = {
-        role: 'assistant',
-        content: response.data.response,
-        sources: response.data.sources || [],
-        timestamp: response.data.timestamp
-      };
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
       
-      setMessages(prev => [...prev, aiMessage]);
-      
-      // Stats'ı güncelle
-      if (stats) {
-        setStats(prev => ({
-          ...prev,
-          total_queries: (prev?.total_queries || 0) + 1
-        }));
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(line.slice(6));
+            
+            if (data.type === 'metadata') {
+              sources = data.sources || [];
+            } else if (data.type === 'chunk') {
+              fullText += data.content;
+              // Mesajı güncelle (streaming)
+              setMessages(prev => {
+                const newMessages = [...prev];
+                newMessages[assistantMessageIndex] = {
+                  role: 'assistant',
+                  content: fullText,
+                  sources: sources,
+                  timestamp: new Date().toISOString(),
+                  streaming: true
+                };
+                return newMessages;
+              });
+            } else if (data.type === 'done') {
+              // Streaming bitti
+              setMessages(prev => {
+                const newMessages = [...prev];
+                newMessages[assistantMessageIndex].streaming = false;
+                return newMessages;
+              });
+            } else if (data.type === 'error') {
+              throw new Error(data.message);
+            }
+          } catch (e) {
+            console.error('Parse hatası:', e);
+          }
+        }
       }
-      
-    } catch (error) {
-      console.error('Hata:', error);
-      let errorText = "Bağlantı sorunu. Lütfen tekrar deneyin.";
-if (error.code === 'ECONNABORTED') {
-  errorText = "İstek zaman aşımına uğradı. Lütfen tekrar deneyin.";
-}
-
-const errorMessage = {
-  role: 'assistant',
-  content: `❌ ${errorText}`,
-  timestamp: new Date().toISOString()
-};
-      setMessages(prev => [...prev, errorMessage]);
-    } finally {
-      setLoading(false);
     }
-  };
+    
+  } catch (error) {
+    console.error('Hata:', error);
+    setMessages(prev => {
+      const newMessages = [...prev];
+      newMessages[assistantMessageIndex] = {
+        role: 'assistant',
+        content: `❌ ${error.message}`,
+        timestamp: new Date().toISOString(),
+        streaming: false
+      };
+      return newMessages;
+    });
+  } finally {
+    setLoading(false);
+  }
+};
+// Chat history yükle
+const loadHistory = async () => {
+  try {
+    const response = await axios.get(`${API_BASE}/history/${userId}/${sessionId}?limit=100`);
+    if (response.data.history && response.data.history.length > 0) {
+      const formattedMessages = response.data.history.map(msg => ({
+        role: msg.role,
+        content: msg.content,
+        timestamp: msg.timestamp,
+        sources: msg.metadata?.sources || []
+      }));
+      setMessages(formattedMessages);
+    }
+  } catch (error) {
+    console.error('History yükleme hatası:', error);
+  }
+};
+
+// Chat export
+const exportChat = async () => {
+  try {
+    const response = await axios.post(`${API_BASE}/history/export`, {
+      user_id: userId,
+      session_id: sessionId
+    }, {
+      responseType: 'blob'
+    });
+    
+    const url = window.URL.createObjectURL(new Blob([response.data]));
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `chat_${sessionId}.json`);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  } catch (error) {
+    alert('Export hatası: ' + error.message);
+  }
+};
+
+// Chat sil
+const clearChat = async () => {
+  if (!window.confirm('Tüm chat geçmişi silinecek. Emin misiniz?')) return;
+  
+  try {
+    await axios.delete(`${API_BASE}/history/${userId}/${sessionId}`);
+    setMessages([]);
+    alert('✅ Chat geçmişi silindi');
+  } catch (error) {
+    alert('Silme hatası: ' + error.message);
+  }
+};
+// History otomatik yükle
+useEffect(() => {
+  loadHistory();
+}, []);  // Component mount olunca 1 kez çalışır
   
   // Enter ile gönder
   const handleKeyPress = (e) => {
@@ -275,7 +387,21 @@ const errorMessage = {
                 </button>
               ))}
             </div>
-            
+            {/* Chat Toolbar (EXPORT/CLEAR) */}
+<div className="chat-toolbar">
+  <button className="toolbar-btn" onClick={loadHistory}>
+    <Database size={16} />
+    Geçmişi Yükle
+  </button>
+  <button className="toolbar-btn" onClick={exportChat}>
+    <Download size={16} />
+    Export JSON
+  </button>
+  <button className="toolbar-btn danger" onClick={clearChat}>
+    <Trash2 size={16} />
+    Tümünü Sil
+  </button>
+</div>
             {/* Mesajlar */}
             <div className="messages">
               {messages.length === 0 && (
@@ -289,7 +415,30 @@ const errorMessage = {
               {messages.map((msg, idx) => (
                 <div key={idx} className={`message ${msg.role}`}>
                   <div className="message-content">
-                    <ReactMarkdown>{msg.content}</ReactMarkdown>
+                    <ReactMarkdown
+  components={{
+    code({ node, inline, className, children, ...props }) {
+      return (
+        <code 
+          className={className} 
+          style={{
+            background: 'rgba(0,0,0,0.3)',
+            padding: inline ? '2px 6px' : '12px',
+            borderRadius: '4px',
+            display: inline ? 'inline' : 'block',
+            fontFamily: 'monospace',
+            fontSize: '14px'
+          }}
+          {...props}
+        >
+          {children}
+        </code>
+      );
+    }
+  }}
+>
+  {msg.content}
+</ReactMarkdown>
                     
                     {/* Kaynaklar */}
                     {msg.sources && msg.sources.length > 0 && (
@@ -333,10 +482,12 @@ const errorMessage = {
             <div className="input-area">
               <div className="mode-selector">
                 <select value={mode} onChange={(e) => setMode(e.target.value)}>
-                  <option value="normal">💬 Normal</option>
-                  <option value="research">🔍 Araştırma</option>
-                  <option value="creative">🎨 Yaratıcı</option>
-                  <option value="code">💻 Kod</option>
+                  <option value="normal">💬 Normal Sohbet</option>
+                  <option value="research">🔍 Araştırmacı</option>
+                  <option value="creative">🎨 Yaratıcı Yazar</option>
+                  <option value="code">💻 Yazılımcı</option>
+                  <option value="friend">👋 Arkadaş</option>
+                  <option value="assistant">📋 Kişisel Asistan</option>
                 </select>
                 
                 <label className="web-toggle">

@@ -1,16 +1,21 @@
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse  # ← YENİ
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import hashlib
+import asyncio  # ← YENİ (eğer yoksa)
+import json  # ← YENİ
 
 from services.memory import chat_memory_manager
 from services.knowledge import InformationSnippet, knowledge_system, stats
 from services.web_search import advanced_web_search, scrape_url, SEARXNG_URLS
 from services.db import search_db, save_to_db, collection
+from services.llm import chat_ollama, chat_ollama_stream  # ← YENİ: stream ekledik
 from services.llm import chat_ollama, OLLAMA_MODEL
 from services.rate_limit import check_rate_limit, RATE_LIMIT_PER_MINUTE
+from services.chat_db import chat_db  # ← YENİ: SQLite DB
 
 # ============================================
 # FASTAPI APP
@@ -224,82 +229,118 @@ async def chat(req: ChatRequest, x_forwarded_for: Optional[str] = Header(None)):
     # 6) Prompt & model
     print("[5/5] Cevap oluşturuluyor...")
 
+    # MODE BAZLI KİŞİLİK SİSTEMİ
+    # MODE BAZLI KİŞİLİK SİSTEMİ
     mode_prompts = {
-        "normal": "Sen yardımcı bir AI asistanısın. Öncelikle verilen bilgileri kullan, eğer yetersizse genel bilgini kullan. Mantıklı, tutarlı ve doğal cevaplar ver. Gereksiz kısıtlama yapma. SOHBET GEÇMİŞİNİ DİKKATE AL!",
-        "research": "Sen araştırma asistanısın. Verilen kaynakları detaylı kullan, doğru bilgi ver. SOHBET GEÇMİŞİNİ DİKKATE AL!",
-        "creative": "Sen yaratıcı yazarsın. Verilen bilgilerle özgün ve duygulu içerik oluştur. SOHBET GEÇMİŞİNİ DİKKATE AL!",
-        "code": "Sen programlama uzmanısın. Kod örnekleri ve açıklamaları net ve anlaşılır yaz. SOHBET GEÇMİŞİNİ DİKKATE AL!",
-        "spor": "⚽ SPOR ASİSTANI: Maç skorlarını net şekilde ver, takım isimlerini doğru yaz, tarih ve lig bilgisi ekle. SOHBET GEÇMİŞİNİ DİKKATE AL!"
-    }
+    "normal": """Sen akıllı, yardımsever bir yapay zeka asistanısın. 
+KURALLAR:
+- Doğal Türkçe konuş (robot gibi değil)
+- Verilen bilgileri kullan, eğer yoksa genel bilgini kullan
+- Kısa ve net cevaplar ver
+- Gereksiz tekrar yapma""",
+
+    "research": """Sen profesyonel araştırma asistanısın.
+KURALLAR:
+- Akademik ve detaylı cevaplar ver
+- Kaynakları referans göster
+- Bilimsel yöntemle yaklaş
+- Tartışmalı konularda tarafsız kal
+- Verilen kaynaklardaki bilgileri önceliklendir""",
+
+    "creative": """Sen yaratıcı bir yazarsın.
+KURALLAR:
+- Akıcı ve duygusal dil kullan
+- Metaforlar, örnekler ekle
+- Hayal gücünü kullan
+- Verilen bilgileri yaratıcı şekilde işle""",
+
+    "code": """Sen deneyimli bir yazılım mühendisisin.
+KURALLAR:
+- Kod örnekleri ver
+- Best practices kullan
+- Açıklayıcı yorumlar ekle
+- Alternatif çözümler sun
+- Temiz ve okunabilir kod yaz""",
+
+    "friend": """Sen samimi bir arkadaşsın.
+KURALLAR:
+- Doğal, günlük dil kullan
+- Empati kur
+- Sohbet havasında cevapla
+- Resmi olmayan üslup kullan""",
+
+    "assistant": """Sen kişisel asistansın.
+KURALLAR:
+- Organize ve verimli ol
+- Pratik çözümler sun
+- Adım adım rehberlik et
+- Net ve actionable öneriler ver"""
+}
 
     system_prompt = mode_prompts.get(req.mode, mode_prompts["normal"])
 
     if knowledge_analysis["snippets"]:
         context_parts = []
         for i, snippet in enumerate(knowledge_analysis["snippets"][:5]):
+            # Kaynak türüne göre etiket
+            if snippet.source_type == "internal_kb":
+                source_label = "💾 VERİTABANI"
+            elif snippet.source_type == "official_site":
+                source_label = "🏛️ RESMİ"
+            elif snippet.source_type == "reputable_news":
+                source_label = "📰 HABER"
+            else:
+                source_label = "🌐 WEB"
+
             context_parts.append(
-                f"[KAYNAK {i + 1} - GÜVEN: {snippet.confidence} - KALİTE: {snippet.quality_score}]: {snippet.content[:800]}"
+                f"{source_label} {i+1} (Güven: {int(snippet.confidence*100)}%):\n{snippet.content[:800]}"
             )
 
         context = "\n\n".join(context_parts)
 
+        # Doğrulama bilgisi
         if knowledge_analysis["cross_verification"]["verified"]:
-            cross_verify_text = (
-                f"\n\n✅ ÇAPRAZ DOĞRULAMA: Bilgiler "
-                f"{knowledge_analysis['cross_verification']['consensus'] * 100:.0f}% oranında doğrulandı."
-            )
+            verify_info = f"✅ {len(knowledge_analysis['snippets'])} kaynak doğrulandı"
         else:
-            cross_verify_text = (
-                f"\n\n⚠️ ÇAPRAZ DOĞRULAMA: Bilgiler sınırlı kaynakla doğrulandı "
-                f"(%{knowledge_analysis['cross_verification']['consensus'] * 100:.0f})."
-            )
+            verify_info = "⚠️ Tek kaynak"
 
-        conflict_text = ""
+        # Çatışma bilgisi
+        conflict_info = ""
         if knowledge_analysis["has_conflicts"]:
-            conflict_text = "\n\n🚨 UYARI: Bazı bilgi çakışmaları tespit edildi:\n"
-            for conflict in knowledge_analysis["conflicts"]:
-                conflict_text += f"- {conflict.get('type', 'belirsiz')}: {conflict.get('resolution', 'En güncel bilgi kullanıldı')}\n"
+            conflict_info = "\n🚨 Bilgi çatışması var"
 
-        prompt = f"""KULLANICI SORUSU: {req.message}
+        # PROMPT
+        prompt = f"""SEN: {system_prompt}
 
-💬 SOHBET GEÇMİŞİ:
-{conversation_context if conversation_context else "Yeni sohbet başladı"}
+📅 {datetime.now().strftime('%d %B %Y')}
 
-BULUNAN BİLGİLER:
+💬 SOHBET:
+{conversation_context if conversation_context else "[İlk mesaj]"}
+
+❓ SORU: {req.message}
+
+📚 BİLGİLER:
 {context}
-{cross_verify_text}
-{conflict_text}
 
-YÖNERGELER:
-• Önce sohbet geçmişini dikkatle oku ve bağlamı anla
-• Kullanıcının önceki sorularını ve cevapları dikkate al
-• Yukarıdaki bilgileri kullanarak net ve doğal bir cevap ver
-• Çapraz doğrulama sonuçlarını dikkate al
-• Bilgi çakışması varsa en güvenilir kaynağı kullan
-• Eksik bilgi varsa sadece mevcut olanı ver
-• Tamamen bilgi yoksa dürüstçe "bilgi bulunamadı" de
+{verify_info}
+{conflict_info}
 
-BUGÜN: {datetime.now().strftime('%d %B %Y')}
+🎯 Doğal Türkçe ile cevapla:"""
 
-CEVAP (samimi, akıcı Türkçe ile yaz):"""
     else:
-        prompt = f"""KULLANICI SORUSU: {req.message}
+        # Bilgi bulunamadı
+        prompt = f"""SEN: {system_prompt}
 
-💬 SOHBET GEÇMİŞİ:
-{conversation_context if conversation_context else "Yeni sohbet başladı"}
+📅 {datetime.now().strftime('%d %B %Y')}
 
-DURUM: Bu konuda detaylı bilgi bulunamadı.
+💬 SOHBET:
+{conversation_context if conversation_context else "[İlk mesaj]"}
 
-YÖNERGELER:
-• Sohbet geçmişini dikkate al
-• Genel bilgini kullanabilirsin
-• Mantıklı ve gerçekçi bir cevap ver
-• Bilgi olmadığını açıkça belirt
-• Yine de kullanıcıya yardımcı olmaya çalış
+❓ SORU: {req.message}
 
-BUGÜN: {datetime.now().strftime('%d %B %Y')}
+⚠️ Güncel bilgi yok
 
-CEVAP (samimi, akıcı Türkçe ile yaz):"""
+🎯 Genel bilginle doğal cevap ver:"""
 
     response_text = await chat_ollama(
         prompt,
@@ -336,6 +377,163 @@ CEVAP (samimi, akıcı Türkçe ile yaz):"""
         cross_verification=knowledge_analysis["cross_verification"]
     )
 
+
+# ============================================
+# STREAMING CHAT ENDPOINT (YENİ)
+# ============================================
+
+@app.post("/api/chat/stream")
+async def chat_stream(req: ChatRequest, x_forwarded_for: Optional[str] = Header(None)):
+    """Streaming chat endpoint - kelime kelime cevap"""
+    
+    # Rate limit
+    client_ip = x_forwarded_for or "127.0.0.1"
+    if not check_rate_limit(client_ip):
+        raise HTTPException(429, "Çok fazla istek.")
+    
+    # Kullanıcı mesajını kaydet
+    chat_memory_manager.add_message(req.user_id, req.session_id, "user", req.message)
+    chat_db.save_message(req.user_id, req.session_id, "user", req.message)
+    
+    async def generate():
+        """Generator fonksiyon - streaming için"""
+        try:
+            # 1) Sohbet hafızası
+            conversation_context = chat_memory_manager.get_conversation_context(
+                req.user_id, req.session_id
+            )
+            
+            # 2) Web araması (aynı mantık)
+            sources = []
+            web_snippets = []
+            db_snippets = []
+            
+            # DB araması
+            db_results = search_db(req.message, n=3, min_relevance=60.0)
+            if db_results:
+                for item in db_results:
+                    scraped_at = item["metadata"].get("scraped_at", datetime.now().isoformat())
+                    db_snippets.append(
+                        InformationSnippet(
+                            content=item["content"],
+                            source_type="internal_kb",
+                            source_url=item["metadata"].get("url", ""),
+                            confidence=item["relevance"] / 100,
+                            timestamp=datetime.fromisoformat(scraped_at),
+                            category=item["metadata"].get("category", "general")
+                        )
+                    )
+            
+            # Web araması (basitleştirilmiş)
+            if req.use_web_search:
+                search_results = await advanced_web_search(req.message, req.max_sources)
+                if search_results:
+                    scrape_tasks = [scrape_url(r["url"]) for r in search_results]
+                    scraped_contents = await asyncio.gather(*scrape_tasks, return_exceptions=True)
+                    
+                    for result, content in zip(search_results, scraped_contents):
+                        if isinstance(content, str) and len(content) > 100:
+                            qa = knowledge_system.assess_content_quality_advanced(
+                                content, result["title"], result["url"]
+                            )
+                            if qa["quality_score"] >= 0.4:
+                                domain_trust = qa["domain_trust"]
+                                web_snippets.append(
+                                    InformationSnippet(
+                                        content=f"{result['title']}: {content}",
+                                        source_type="general_web",
+                                        source_url=result["url"],
+                                        confidence=domain_trust * 0.8,
+                                        timestamp=datetime.now(),
+                                        category="web_content",
+                                        quality_score=qa["quality_score"],
+                                        domain_trust=domain_trust
+                                    )
+                                )
+                                sources.append({
+                                    "title": result["title"],
+                                    "url": result["url"]
+                                })
+            
+            # 3) Bilgi analizi
+            knowledge_analysis = knowledge_system.evaluate_information_quality(
+                web_snippets, db_snippets, req.message
+            )
+            
+            # 4) Prompt oluştur (aynı mantık)
+            mode_prompts = {
+                "normal": "Sen yardımcı bir AI asistanısın. Sohbet geçmişini dikkate al.",
+                "research": "Sen araştırma asistanısın. Detaylı bilgi ver.",
+                "creative": "Sen yaratıcı yazarsın.",
+                "code": "Sen programlama uzmanısın."
+            }
+            system_prompt = mode_prompts.get(req.mode, mode_prompts["normal"])
+            
+            if knowledge_analysis["snippets"]:
+                context_parts = []
+                for i, snippet in enumerate(knowledge_analysis["snippets"][:5]):
+                    context_parts.append(
+                        f"[KAYNAK {i+1}]: {snippet.content[:800]}"
+                    )
+                context = "\n\n".join(context_parts)
+                
+                prompt = f"""KULLANICI SORUSU: {req.message}
+
+💬 SOHBET GEÇMİŞİ:
+{conversation_context if conversation_context else "Yeni sohbet"}
+
+BULUNAN BİLGİLER:
+{context}
+
+CEVAP (Türkçe):"""
+            else:
+                prompt = f"""KULLANICI SORUSU: {req.message}
+
+💬 SOHBET GEÇMİŞİ:
+{conversation_context if conversation_context else "Yeni sohbet"}
+
+CEVAP (Türkçe):"""
+            
+            # 5) İlk olarak metadata gönder (kaynaklar)
+            metadata = {
+                "type": "metadata",
+                "sources": sources,
+                "db_count": len(db_snippets),
+                "web_count": len(sources)
+            }
+            yield f"data: {json.dumps(metadata, ensure_ascii=False)}\n\n"
+            
+            # 6) Streaming cevap
+            full_response = ""
+            async for chunk in chat_ollama_stream(
+                prompt, system_prompt, req.temperature, req.max_tokens
+            ):
+                full_response += chunk
+                data = {"type": "chunk", "content": chunk}
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            
+            # 7) Cevabı kaydet
+            chat_memory_manager.add_message(req.user_id, req.session_id, "assistant", full_response)
+            chat_db.save_message(req.user_id, req.session_id, "assistant", full_response, {
+                "sources": sources,
+                "mode": req.mode
+            })
+            
+            # 8) Bitti sinyali
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+            
+        except Exception as e:
+            error_data = {"type": "error", "message": str(e)}
+            yield f"data: {json.dumps(error_data)}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 # ============================================
 # DİĞER ENDPOINT'LER
 # ============================================
@@ -415,6 +613,40 @@ async def clear_chat_memory(user_id: str, session_id: str):
     chat_memory_manager.clear_memory(user_id, session_id)
     return {"success": True, "message": "Sohbet hafızası temizlendi"}
 
+# ============================================
+# CHAT HISTORY ENDPOINT'LERİ (YENİ)
+# ============================================
+
+@app.get("/api/history/{user_id}/{session_id}")
+async def get_history(user_id: str, session_id: str, limit: int = 50):
+    """Kullanıcının chat geçmişini getir (SQLite'dan)"""
+    history = chat_db.get_history(user_id, session_id, limit)
+    return {"history": history, "count": len(history)}
+
+
+@app.post("/api/history/export")
+async def export_history(req: dict):
+    """Chat geçmişini JSON olarak export et"""
+    user_id = req.get("user_id")
+    session_id = req.get("session_id")
+    
+    if not user_id or not session_id:
+        raise HTTPException(400, "user_id ve session_id gerekli")
+    
+    json_data = chat_db.export_history(user_id, session_id)
+    return StreamingResponse(
+        iter([json_data]),
+        media_type="application/json",
+        headers={"Content-Disposition": f"attachment; filename=chat_{session_id}.json"}
+    )
+
+
+@app.delete("/api/history/{user_id}/{session_id}")
+async def delete_history(user_id: str, session_id: str):
+    """Chat geçmişini sil"""
+    chat_db.clear_session(user_id, session_id)
+    chat_memory_manager.clear_memory(user_id, session_id)
+    return {"success": True, "message": "Geçmiş silindi"}
 
 if __name__ == "__main__":
     import uvicorn
