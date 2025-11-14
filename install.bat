@@ -5,7 +5,7 @@ echo ║   DeepSeek AI System - ULTRA Optimized Kurulum   ║
 echo ╚═══════════════════════════════════════════════════╝
 echo.
 
-cd /d D:\AI_Platform\Ana_Beyin_FastAPI\code
+cd /d D:\AI\backend
 
 echo [1/5] Python bağımlılıkları kuruluyor...
 cd backend

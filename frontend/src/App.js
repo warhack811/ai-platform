@@ -309,7 +309,7 @@ useEffect(() => {
       <div className="sidebar">
         <div className="logo">
           <Zap size={32} color="#8b5cf6" />
-          <h1>DeepSeek AI</h1>
+          <h1>Muhammet AI</h1>
           <span className="badge">ULTRA</span>
         </div>
         
@@ -407,7 +407,7 @@ useEffect(() => {
               {messages.length === 0 && (
                 <div className="welcome">
                   <Brain size={64} />
-                  <h2>DeepSeek AI - Ultra Optimized</h2>
+                  <h2>Muhammet AI - Ultra Optimized</h2>
                   <p>3x daha hızlı • Akıllı cache • Sansürsüz</p>
                 </div>
               )}

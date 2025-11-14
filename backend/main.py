@@ -651,7 +651,7 @@ async def delete_history(user_id: str, session_id: str):
 if __name__ == "__main__":
     import uvicorn
     print("\n" + "=" * 60)
-    print("🚀 DeepSeek AI - GELİŞMİŞ BİLGİ SİSTEMİ")
+    print("🚀 Muhammet AI - GELİŞMİŞ BİLGİ SİSTEMİ")
     print("=" * 60)
     print(f"📊 Frontend: http://localhost:3000")
     print(f"🔌 API: http://localhost:8000")
